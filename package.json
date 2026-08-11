@@ -1,0 +1,36 @@
+{
+  "name": "gemini-multi-account",
+  "version": "1.0.0",
+  "description": "Seamless Multi-Account Manager for Google Gemini",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.gemini.multiaccount",
+    "productName": "Gemini Multi-Account",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "dependencies": {
+    "sweetalert2": "^11.26.25"
+  },
+  "devDependencies": {
+    "electron": "^30.5.1",
+    "electron-builder": "^24.13.3"
+  },
+  "author": "Antigravity",
+  "license": "ISC",
+  "allowScripts": {
+    "electron@30.5.1": true
+  }
+}

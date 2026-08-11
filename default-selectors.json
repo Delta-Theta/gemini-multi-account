@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "selectors": {
+    "editor": "rich-textarea, .ql-editor, [contenteditable=\"true\"], [role=\"textbox\"]",
+    "sendButton": "button[aria-label*=\"Send\"], button[aria-label*=\"send\"], .send-button",
+    "chatContainer": "chat-app",
+    "chatNodes": "user-query, model-response, [data-message-author], message-content",
+    "avatarClass": "avatar",
+    "sidebarElements": "navigation-drawer, side-navigation-drawer, [data-test-id=\"conversation-list\"], .mat-drawer, nav",
+    "hamburgerMenu": "[aria-label=\"Main menu\"], .hamburger-menu",
+    "mainContent": "main, .page-content, .main-content",
+    "chatListLinks": "a[href*=\"/app/\"]"
+  },
+  "regex": {
+    "limitMessages": ["You've reached your limit", "limit reached"],
+    "limitReset": "try again at ([\\d:]+\\s[AP]M)"
+  }
+}

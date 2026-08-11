@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gemini Multi-Account Wrapper</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- SweetAlert2 for nice popups -->
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+</head>
+<body>
+    <div id="app">
+        <!-- Custom Sidebar -->
+        <aside id="sidebar">
+            <div class="sidebar-header">
+                <h2>Topics</h2>
+                <button id="new-chat-btn" class="btn primary-btn">+ New Chat</button>
+            </div>
+            <ul id="topic-list">
+                <!-- Topics will be dynamically populated here -->
+            </ul>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main id="main-content">
+            <!-- Topbar (Custom Native-looking Account Switcher) -->
+            <header id="topbar">
+                <div class="model-info">
+                    <span class="gemini-logo">✨ Gemini</span>
+                </div>
+                
+                <div class="controls">
+                    <select id="account-select" class="dropdown-btn">
+                        <option value="0">Account 1</option>
+                        <option value="1">Account 2</option>
+                    </select>
+                    
+                    <button id="add-account-btn" class="btn add-btn" title="Add another account">+</button>
+                    
+                    <!-- Paste Delta Button in Topbar -->
+                    <button id="paste-delta-container" style="display: none; background: linear-gradient(135deg, #10a37f 0%, #0d8a6a 100%); color: white; border: none; padding: 6px 14px; border-radius: 20px; font-weight: 600; cursor: pointer; align-items: center; gap: 6px; box-shadow: 0 4px 12px rgba(16, 163, 127, 0.3);">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg>
+                        <span id="paste-delta-text">Paste Delta</span>
+                    </button>
+                </div>
+            </header>
+            
+            <!-- The BrowserView will cover the rest of this space automatically via main.js -->
+        </main>
+    </div>
+    <script src="renderer.js"></script>
+</body>
+</html>
