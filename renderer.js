@@ -106,6 +106,9 @@ accountSelect.addEventListener('change', (e) => {
         // Hide FAB if showing
         if (pasteDeltaContainer) pasteDeltaContainer.style.display = 'none';
         
+        // Hide the BrowserView so popups are visible to the user
+        ipcRenderer.send('hide-active-view');
+        
         // Extract chat from CURRENT account before leaving
         ipcRenderer.send('request-chat-history', activeAccountIndex);
         
@@ -194,10 +197,14 @@ ipcRenderer.on('view-event', (event, data) => {
         renderAccountList();
         
         if (data.accountIndex === activeAccountIndex) {
+            // Hide BrowserView so popup is visible
+            ipcRenderer.send('hide-active-view');
             Swal.fire({
                 title: 'Limit Reached!',
                 text: `This account is limited. Resets at ${resetTime}. Please select another account from the top menu.`,
                 icon: 'warning'
+            }).then(() => {
+                ipcRenderer.send('show-active-view');
             });
         }
 
@@ -207,10 +214,10 @@ ipcRenderer.on('view-event', (event, data) => {
         const isLegacy = Array.isArray(data.blocks);
         const blocks = isLegacy ? data.blocks : (payload.chatBlocks || []);
         const images = isLegacy ? [] : (payload.images || []);
-        
-        const currentLength = blocks.length;
         const currentImagesLength = images.length;
         const viewUrl = data.viewUrl || 'default';
+        
+        const currentLength = blocks.length;
         
         if (pendingSwitchTarget === null) {
             // ===== BASELINE RECORDING =====
@@ -219,28 +226,18 @@ ipcRenderer.on('view-event', (event, data) => {
             arrivedBaselines[topicKey + '_imgs'] = currentImagesLength;
             
         } else {
-            // ===== LEAVING ACCOUNT - CALCULATE DELTA =====
+            // ===== LEAVING ACCOUNT - CALCULATE DELTA & PROMPT =====
             const topicKey = `acc${activeAccountIndex}_${viewUrl}`;
             const baseline = arrivedBaselines[topicKey] || 0;
             const baselineImgs = arrivedBaselines[topicKey + '_imgs'] || 0;
             
-            if (currentLength > baseline) {
-                // New messages exist! Calculate delta
-                const delta = blocks.slice(baseline);
-                const deltaImages = images.slice(baselineImgs);
-                
-                pendingDeltaText = delta.join('\n\n---\n\n');
-                pendingDeltaImages = deltaImages; // NEW: Store images
-                pendingDeltaTarget = pendingSwitchTarget;
-                
-                // Update baseline so we don't re-send next time
-                arrivedBaselines[topicKey] = currentLength;
-                arrivedBaselines[topicKey + '_imgs'] = currentImagesLength;
-                
-                // Show the Sync button
-                if (pasteDeltaContainer && pasteDeltaText) {
-                    var imgCount = deltaImages.length;
-                    var btnLabel = 'Sync Context (' + delta.length + ' msgs';
+            // Helper function to show sync button
+            function showSyncButton() {
+                if (pasteDeltaContainer && pasteDeltaText && pendingDeltaText) {
+                    var imgCount = pendingDeltaImages.length;
+                    // Count roughly the number of messages being synced
+                    var msgCount = pendingDeltaText.split('\n\n---\n\n').length;
+                    var btnLabel = 'Sync Context (' + msgCount + ' msgs';
                     if (imgCount > 0) {
                         btnLabel += ', ' + imgCount + ' imgs';
                     }
@@ -249,18 +246,96 @@ ipcRenderer.on('view-event', (event, data) => {
                     pasteDeltaContainer.style.display = 'flex';
                 }
             }
-            
-            // Switch to target account immediately
-            Swal.close();
-            ipcRenderer.send('switch-account', pendingSwitchTarget);
-            
-            // After arriving at new account, record its baseline too
-            const switchedTo = pendingSwitchTarget;
-            setTimeout(() => {
-                ipcRenderer.send('request-chat-history', switchedTo);
-            }, 1500);
-            
-            pendingSwitchTarget = null;
+
+            // Helper function to handle the actual switch and cleanup
+            function executeSwitch(targetIndex) {
+                Swal.close();
+                ipcRenderer.send('switch-account', targetIndex);
+                
+                // Show the new BrowserView after switching
+                setTimeout(() => {
+                    ipcRenderer.send('show-active-view');
+                }, 200);
+                
+                // After arriving at new account, record its baseline too
+                setTimeout(() => {
+                    ipcRenderer.send('request-chat-history', targetIndex);
+                }, 1500);
+            }
+
+            if (currentLength > 0) {
+                const savedSwitchTarget = pendingSwitchTarget; // Save before async!
+                const newMsgsCount = currentLength - baseline;
+                const hasNewOnly = (baseline > 0 && newMsgsCount > 0 && newMsgsCount < currentLength);
+                
+                Swal.close(); // Close the loading popup before showing the options
+                
+                if (hasNewOnly) {
+                    // We have a baseline AND there are NEW messages beyond it.
+                    // Show choice: ALL vs NEW
+                    Swal.fire({
+                        title: 'Sync Options',
+                        text: `You have ${newMsgsCount} new messages (total ${currentLength}). Sync the ENTIRE chat or ONLY the NEW messages?`,
+                        icon: 'question',
+                        showCancelButton: true,
+                        showDenyButton: true,
+                        confirmButtonText: `Sync ALL (${currentLength})`,
+                        denyButtonText: `Sync NEW (${newMsgsCount})`,
+                        cancelButtonText: 'Skip',
+                        reverseButtons: false,
+                        allowOutsideClick: false
+                    }).then((result) => {
+                        if (result.isConfirmed) {
+                            // Sync ALL
+                            pendingDeltaText = blocks.join('\n\n---\n\n');
+                            pendingDeltaImages = images;
+                            pendingDeltaTarget = savedSwitchTarget;
+                            showSyncButton();
+                        } else if (result.isDenied) {
+                            // Sync NEW only
+                            pendingDeltaText = blocks.slice(baseline).join('\n\n---\n\n');
+                            pendingDeltaImages = images.slice(baselineImgs);
+                            pendingDeltaTarget = savedSwitchTarget;
+                            showSyncButton();
+                        }
+                        // If cancelled (Skip), don't sync anything
+                        
+                        arrivedBaselines[topicKey] = currentLength;
+                        arrivedBaselines[topicKey + '_imgs'] = currentImagesLength;
+                        executeSwitch(savedSwitchTarget);
+                        pendingSwitchTarget = null;
+                    });
+                } else {
+                    // No baseline OR no new messages beyond baseline.
+                    // Show choice: Sync ALL or Skip
+                    Swal.fire({
+                        title: 'Sync Context?',
+                        text: `${currentLength} messages found. Sync the entire chat to the next account?`,
+                        icon: 'question',
+                        showCancelButton: true,
+                        confirmButtonText: `Sync ALL (${currentLength})`,
+                        cancelButtonText: 'Skip',
+                        allowOutsideClick: false
+                    }).then((result) => {
+                        if (result.isConfirmed) {
+                            pendingDeltaText = blocks.join('\n\n---\n\n');
+                            pendingDeltaImages = images;
+                            pendingDeltaTarget = savedSwitchTarget;
+                            showSyncButton();
+                        }
+                        // If cancelled (Skip), don't sync anything
+                        
+                        arrivedBaselines[topicKey] = currentLength;
+                        arrivedBaselines[topicKey + '_imgs'] = currentImagesLength;
+                        executeSwitch(savedSwitchTarget);
+                        pendingSwitchTarget = null;
+                    });
+                }
+            } else {
+                // Nothing to sync
+                executeSwitch(pendingSwitchTarget);
+                pendingSwitchTarget = null;
+            }
         }
 
     } else if (data.type === 'url-changed') {
@@ -296,12 +371,17 @@ ipcRenderer.on('file-ready', (event, data) => {
         '</p>' +
         '</div>';
 
+    // Hide BrowserView so popup is visible
+    ipcRenderer.send('hide-active-view');
+    
     Swal.fire({
         title: data.pdfPath ? '📄 Context & Images Ready!' : '📄 Context Ready!',
         html: htmlContent,
         icon: 'success',
         confirmButtonText: 'OK, මම Upload කරන්නම් ✅',
         confirmButtonColor: '#10a37f',
+    }).then(() => {
+        ipcRenderer.send('show-active-view');
     });
 });
 
