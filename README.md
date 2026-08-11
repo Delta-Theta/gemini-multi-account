@@ -42,3 +42,13 @@
 මේ ෆයිල් දෙක හැම වෙලේම SYNC බටන් ඔබන්න ඔබන්න අප්ඩෙට් වෙනවා 
 
 මෙතනින් එහාට කරන එවා ගොඩක් දුරට ඔයාට තෙරෙයි පොප් අප් මැසෙජ් වලින් එනවා කරන්න ඔන්නෙ දෙ 
+
+
+
+<img width="256" height="256" alt="td_icon" src="https://github.com/user-attachments/assets/1c70fcd2-b83b-4a53-9aaf-28c4611b8f8f" />
+
+
+මාව කන්ටක් කර ගන්න වැම GEMINI PRO අඩුවට ඔනේ නම් කියන්න අඩුවට දෙන්නම් 
+
+📩 ඇණවුම් කිරීමට Telegram හරහා සම්බන්ධ වන්න: 👉 Message: https://t.me/Delta_theta
+📢 තවත් Offers බලාගන්න Channel එකට එන්න: 👉 https://t.me/SSB_PROJECTS
