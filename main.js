@@ -14,20 +14,42 @@ const SYNC_PDF_PATH = path.join(app.getPath('desktop'), 'context_sync_images.pdf
 // Persist account count so app remembers added accounts after restart
 const accountCountPath = path.join(app.getPath('userData'), 'account_count.json');
 
+// Default Hardcoded Config (Guarantees appConfig is NEVER null even if offline & file missing)
+const FALLBACK_CONFIG = {
+    version: 1,
+    selectors: {
+        editor: 'rich-textarea, .ql-editor, [contenteditable="true"], [role="textbox"]',
+        sendButton: 'button[aria-label*="Send"], button[aria-label*="send"], .send-button',
+        chatContainer: 'chat-app',
+        chatNodes: 'user-query, model-response, [data-message-author], message-content',
+        avatarClass: 'avatar',
+        sidebarElements: 'navigation-drawer, side-navigation-drawer, [data-test-id="conversation-list"], .mat-drawer, nav',
+        hamburgerMenu: '[aria-label="Main menu"], .hamburger-menu',
+        mainContent: 'main, .page-content, .main-content',
+        chatListLinks: 'a[href*="/app/"]'
+    },
+    regex: {
+        limitMessages: ["You've reached your limit", "limit reached"],
+        limitReset: "try again at ([\\d:]+\\s[AP]M)"
+    }
+};
+
 // Global app config for Dynamic Selectors (Remote Config)
-let appConfig = null;
-const CONFIG_URL = "https://raw.githubusercontent.com/antigravity/gemini-config/main/selectors.json"; // Placeholder for cloud URL
+let appConfig = FALLBACK_CONFIG;
+const CONFIG_URL = "https://raw.githubusercontent.com/antigravity/gemini-config/main/selectors.json";
 const DEFAULT_CONFIG_PATH = path.join(__dirname, 'default-selectors.json');
 
 async function loadAppConfig() {
     try {
         console.log('[CONFIG] Fetching remote config from:', CONFIG_URL);
-        // Simulate a fetch with a short timeout to prevent startup lag
         const response = await fetch(CONFIG_URL, { signal: AbortSignal.timeout(3000) });
         if (response.ok) {
-            appConfig = await response.json();
-            console.log('[CONFIG] Successfully loaded remote config version:', appConfig.version);
-            return;
+            const fetched = await response.json();
+            if (fetched && fetched.selectors) {
+                appConfig = fetched;
+                console.log('[CONFIG] Successfully loaded remote config version:', appConfig.version);
+                return;
+            }
         }
     } catch (e) {
         console.log('[CONFIG] Remote fetch failed or timed out. Falling back to local defaults.');
@@ -36,22 +58,23 @@ async function loadAppConfig() {
     // Fallback to local default-selectors.json
     try {
         if (fs.existsSync(DEFAULT_CONFIG_PATH)) {
-            appConfig = JSON.parse(fs.readFileSync(DEFAULT_CONFIG_PATH, 'utf8'));
-            console.log('[CONFIG] Loaded local fallback config version:', appConfig.version);
+            const local = JSON.parse(fs.readFileSync(DEFAULT_CONFIG_PATH, 'utf8'));
+            if (local && local.selectors) {
+                appConfig = local;
+                console.log('[CONFIG] Loaded local fallback config version:', appConfig.version);
+            }
         } else {
-            console.error('[CONFIG] CRITICAL ERROR: default-selectors.json not found!');
+            console.log('[CONFIG] default-selectors.json not found, using built-in FALLBACK_CONFIG');
         }
     } catch (e) {
-        console.error('[CONFIG] Error parsing local config:', e);
+        console.error('[CONFIG] Error parsing local config, using built-in FALLBACK_CONFIG:', e);
     }
 }
 
 function getSavedAccountCount() {
     try {
-        const p = path.join(app.getPath('userData'), 'account_count.json');
-        console.log('[ACCOUNTS] Reading count from:', p);
-        if (fs.existsSync(p)) {
-            const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+        if (fs.existsSync(accountCountPath)) {
+            const data = JSON.parse(fs.readFileSync(accountCountPath, 'utf8'));
             console.log('[ACCOUNTS] Saved count:', data.count);
             return Math.max(2, Math.min(data.count || 2, MAX_ACCOUNTS));
         } else {
@@ -65,14 +88,12 @@ function getSavedAccountCount() {
 
 function saveAccountCount(count) {
     try {
-        var userDataDir = app.getPath('userData');
-        // Ensure directory exists
+        const userDataDir = app.getPath('userData');
         if (!fs.existsSync(userDataDir)) {
             fs.mkdirSync(userDataDir, { recursive: true });
         }
-        var filePath = path.join(userDataDir, 'account_count.json');
-        fs.writeFileSync(filePath, JSON.stringify({ count: count }));
-        console.log('[ACCOUNTS] Saved count:', count, 'to:', filePath);
+        fs.writeFileSync(accountCountPath, JSON.stringify({ count: count }));
+        console.log('[ACCOUNTS] Saved count:', count, 'to:', accountCountPath);
     } catch (e) {
         console.error('[ACCOUNTS] Error saving account count:', e);
     }
@@ -85,13 +106,21 @@ let topicsDb = { topics: [] };
 if (fs.existsSync(dbPath)) {
     try {
         topicsDb = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
+        if (!Array.isArray(topicsDb.topics)) {
+            topicsDb.topics = [];
+        }
     } catch (e) {
         console.error('Error reading topics.json:', e);
+        topicsDb = { topics: [] };
     }
 }
 
 function saveDb() {
-    fs.writeFileSync(dbPath, JSON.stringify(topicsDb, null, 2));
+    try {
+        fs.writeFileSync(dbPath, JSON.stringify(topicsDb, null, 2));
+    } catch (e) {
+        console.error('Error writing topics.json:', e);
+    }
 }
 
 function createWindow() {
@@ -135,35 +164,55 @@ function createBrowserView(index) {
     view.webContents.loadURL('https://gemini.google.com/app');
 }
 
+let isViewAttached = false;
+
 function updateViewBounds() {
-    if (!mainWindow) return;
+    if (!mainWindow || !isViewAttached) return;
     const bounds = mainWindow.getBounds();
     const activeView = browserViews[activeAccountIndex];
     if (activeView) {
-        activeView.setBounds({ x: 250, y: 60, width: bounds.width - 250 - 16, height: bounds.height - 60 - 39 });
+        activeView.setBounds({ x: 250, y: 60, width: Math.max(100, bounds.width - 250 - 16), height: Math.max(100, bounds.height - 60 - 39) });
+    }
+}
+
+function attachActiveView() {
+    if (!mainWindow || isViewAttached) return;
+    const activeView = browserViews[activeAccountIndex];
+    if (activeView) {
+        mainWindow.addBrowserView(activeView);
+        isViewAttached = true;
+        updateViewBounds();
+    }
+}
+
+function detachActiveView() {
+    if (!mainWindow || !isViewAttached) return;
+    const activeView = browserViews[activeAccountIndex];
+    if (activeView) {
+        mainWindow.removeBrowserView(activeView);
+        isViewAttached = false;
     }
 }
 
 function switchAccount(index) {
-    if (index >= 0 && index < browserViews.length && browserViews[index]) {
-        if (browserViews[activeAccountIndex]) {
-            mainWindow.removeBrowserView(browserViews[activeAccountIndex]);
-        }
-        
+    if (typeof index === 'number' && index >= 0 && index < browserViews.length && browserViews[index]) {
+        detachActiveView();
         activeAccountIndex = index;
-        mainWindow.addBrowserView(browserViews[activeAccountIndex]);
-        updateViewBounds();
-        
+        attachActiveView();
         mainWindow.webContents.send('account-switched', index);
     }
 }
 
 app.whenReady().then(async () => {
     // Make the app run automatically when the PC starts (Startup App)
-    app.setLoginItemSettings({
-        openAtLogin: true,
-        path: app.getPath("exe")
-    });
+    try {
+        app.setLoginItemSettings({
+            openAtLogin: true,
+            path: app.getPath("exe")
+        });
+    } catch (e) {
+        console.warn('Could not set login item settings:', e);
+    }
     
     await loadAppConfig(); // Load config before creating windows
     createWindow();
@@ -182,21 +231,16 @@ ipcMain.on('switch-account', (event, index) => {
 
 // Provide config to Preload scripts synchronously
 ipcMain.on('get-config', (event) => {
-    event.returnValue = appConfig;
+    event.returnValue = appConfig || FALLBACK_CONFIG;
 });
 
 // Temporarily hide/show BrowserView so SweetAlert popups are visible
 ipcMain.on('hide-active-view', () => {
-    if (browserViews[activeAccountIndex]) {
-        mainWindow.removeBrowserView(browserViews[activeAccountIndex]);
-    }
+    detachActiveView();
 });
 
 ipcMain.on('show-active-view', () => {
-    if (browserViews[activeAccountIndex]) {
-        mainWindow.addBrowserView(browserViews[activeAccountIndex]);
-        updateViewBounds();
-    }
+    attachActiveView();
 });
 
 ipcMain.on('add-account', (event) => {
@@ -210,20 +254,22 @@ ipcMain.on('add-account', (event) => {
 
 // ========== SYNC CONTEXT (FILE-BASED) ==========
 ipcMain.on('sync-context', async (event, data) => {
-    const { targetAccount, diffText, images } = data;
+    const { targetAccount, diffText, images } = data || {};
     const imgArray = images || [];
     const targetView = browserViews[targetAccount];
     if (!targetView) return;
 
+    let pdfWin = null;
     try {
         // Focus the editor first (Dynamic Remote Config)
         await targetView.webContents.executeJavaScript(
             '(function() {' +
             '  var config = ' + JSON.stringify(appConfig.selectors) + ';' +
-            '  var selectors = config.editor.split(",").map(function(s) { return s.trim(); });' +
+            '  var editorSelectors = (config.editor || "").split(",").map(function(s) { return s.trim(); });' +
             '  var editor = null;' +
-            '  for (var i = 0; i < selectors.length; i++) {' +
-            '    editor = document.querySelector(selectors[i]);' +
+            '  for (var i = 0; i < editorSelectors.length; i++) {' +
+            '    if (!editorSelectors[i]) continue;' +
+            '    editor = document.querySelector(editorSelectors[i]);' +
             '    if (editor) break;' +
             '  }' +
             '  if (editor) { editor.focus(); editor.click(); return true; }' +
@@ -231,8 +277,8 @@ ipcMain.on('sync-context', async (event, data) => {
             '})()'
         );
 
-        // Save text context
-        fs.writeFileSync(SYNC_FILE_PATH, diffText, 'utf8');
+        // Save text context safely
+        fs.writeFileSync(SYNC_FILE_PATH, diffText || "", 'utf8');
         console.log('Context sync text file written to:', SYNC_FILE_PATH);
         
         let hasPdf = false;
@@ -251,8 +297,9 @@ ipcMain.on('sync-context', async (event, data) => {
             htmlParts.push('<h1 style="color: #10a37f; margin-bottom: 30px;">Chat Images Reference</h1>');
             
             imgArray.forEach(function(img) {
+                const safeName = String(img.name || 'Image').replace(/[<>&]/g, '');
                 htmlParts.push('<div class="image-container">');
-                htmlParts.push('<h2>[' + img.name + ']</h2>');
+                htmlParts.push('<h2>[' + safeName + ']</h2>');
                 htmlParts.push('<img src="' + img.data + '" />');
                 htmlParts.push('</div>');
             });
@@ -260,8 +307,8 @@ ipcMain.on('sync-context', async (event, data) => {
             htmlParts.push('</body></html>');
             var htmlString = htmlParts.join('\n');
 
-            // Create a hidden window to render the HTML to PDF
-            const pdfWin = new BrowserWindow({ show: false });
+            // Create a hidden window to render the HTML to PDF safely with try/finally
+            pdfWin = new BrowserWindow({ show: false });
             await pdfWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(htmlString));
             
             // Wait briefly to ensure images (base64) are rendered
@@ -273,7 +320,6 @@ ipcMain.on('sync-context', async (event, data) => {
             });
             
             fs.writeFileSync(SYNC_PDF_PATH, pdfBuffer);
-            pdfWin.destroy();
             console.log('Context sync PDF file written to:', SYNC_PDF_PATH);
         }
 
@@ -286,16 +332,24 @@ ipcMain.on('sync-context', async (event, data) => {
         }
             
         setTimeout(function() {
-            targetView.webContents.insertText(promptText);
+            if (targetView && !targetView.webContents.isDestroyed()) {
+                targetView.webContents.insertText(promptText);
+            }
         }, 300);
 
         // Notify renderer to show popup with manual instructions
-        mainWindow.webContents.send('file-ready', { 
-            textPath: SYNC_FILE_PATH,
-            pdfPath: hasPdf ? SYNC_PDF_PATH : null
-        });
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('file-ready', { 
+                textPath: SYNC_FILE_PATH,
+                pdfPath: hasPdf ? SYNC_PDF_PATH : null
+            });
+        }
     } catch (e) {
         console.error('Failed to sync context:', e);
+    } finally {
+        if (pdfWin && !pdfWin.isDestroyed()) {
+            pdfWin.destroy();
+        }
     }
 });
 
@@ -499,7 +553,7 @@ ipcMain.on('from-preload-to-main', (event, data) => {
     } else {
         console.warn("Could not find matching browser view for sender:", event.sender.id);
         if (mainWindow && mainWindow.webContents) {
-             mainWindow.webContents.send('view-event', { type: 'chat-history-data', blocks: [] });
+             mainWindow.webContents.send('view-event', { type: 'chat-history-data', blocks: [], accountIndex: 0, viewUrl: 'default' });
         }
     }
 });

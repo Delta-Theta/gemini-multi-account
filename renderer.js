@@ -28,80 +28,94 @@ ipcRenderer.invoke('get-accounts-count').then(count => {
 });
 loadTopics();
 
+let isSyncing = false;
+let switchTimeoutId = null;
+
 // --- FAB Sync Button Click (with topic selection) ---
 if (pasteDeltaContainer) {
     pasteDeltaContainer.addEventListener('click', async () => {
-        if (pendingDeltaTarget === null || pendingDeltaText === "") return;
+        if (isSyncing || pendingDeltaTarget === null || pendingDeltaText === "") return;
+        isSyncing = true;
         
-        // Hide BrowserView so popup is visible (BrowserView sits on top of HTML)
-        ipcRenderer.send('hide-active-view');
-        
-        // Get list of chats from TARGET account's sidebar
-        const chatList = await ipcRenderer.invoke('get-chat-list', pendingDeltaTarget);
-        
-        // Build selection options
-        let inputOptions = { '__current__': '📌 දැනට open chat එක (Current Chat)' };
-        chatList.forEach((chat) => {
-            inputOptions[chat.url] = '💬 ' + chat.title;
-        });
-        
-        // Show topic selection popup
-        const { value: selectedChat } = await Swal.fire({
-            title: '🎯 Chat එකක් තෝරන්න',
-            html: `<p style="text-align:left;">Account ${pendingDeltaTarget + 1} එකේ <b>මොන chat එකටද</b> context sync කරන්න ඕනේ?</p>`,
-            input: 'select',
-            inputOptions: inputOptions,
-            inputValue: '__current__',
-            showCancelButton: true,
-            confirmButtonText: '✅ Sync කරන්න',
-            cancelButtonText: 'අවලංගු කරන්න',
-            confirmButtonColor: '#10a37f',
-            inputValidator: (value) => {
-                if (!value) return 'කරුණාකරලා chat එකක් තෝරන්න!';
-            }
-        });
-        
-        // Show BrowserView back
-        ipcRenderer.send('show-active-view');
-        
-        if (!selectedChat) return; // User cancelled
-        
-        // Navigate to selected chat if it's not "current"
-        if (selectedChat !== '__current__') {
-            ipcRenderer.send('navigate-view', { accountIndex: pendingDeltaTarget, url: selectedChat });
+        try {
+            // Hide BrowserView so popup is visible (BrowserView sits on top of HTML)
+            ipcRenderer.send('hide-active-view');
             
-            // Wait for page to load
-            Swal.fire({
-                title: 'Chat එකට යනවා...',
-                text: 'Page load වෙනකම් ඉන්න...',
-                allowOutsideClick: false,
-                timer: 2500,
-                timerProgressBar: true,
-                didOpen: () => { Swal.showLoading(); }
+            // Get list of chats from TARGET account's sidebar
+            const chatList = await ipcRenderer.invoke('get-chat-list', pendingDeltaTarget);
+            
+            // Build selection options
+            let inputOptions = { '__current__': '📌 දැනට open chat එක (Current Chat)' };
+            if (Array.isArray(chatList)) {
+                chatList.forEach((chat) => {
+                    inputOptions[chat.url] = '💬 ' + chat.title;
+                });
+            }
+            
+            // Show topic selection popup
+            const { value: selectedChat } = await Swal.fire({
+                title: '🎯 Chat එකක් තෝරන්න',
+                html: `<p style="text-align:left;">Account ${pendingDeltaTarget + 1} එකේ <b>මොන chat එකටද</b> context sync කරන්න ඕනේ?</p>`,
+                input: 'select',
+                inputOptions: inputOptions,
+                inputValue: '__current__',
+                showCancelButton: true,
+                confirmButtonText: '✅ Sync කරන්න',
+                cancelButtonText: 'අවලංගු කරන්න',
+                confirmButtonColor: '#10a37f',
+                inputValidator: (value) => {
+                    if (!value) return 'කරුණාකරලා chat එකක් තෝරන්න!';
+                }
             });
-            await new Promise(resolve => setTimeout(resolve, 2500));
+            
+            // Show BrowserView back
+            ipcRenderer.send('show-active-view');
+            
+            if (!selectedChat) return; // User cancelled
+            
+            // Navigate to selected chat if it's not "current"
+            if (selectedChat !== '__current__') {
+                ipcRenderer.send('navigate-view', { accountIndex: pendingDeltaTarget, url: selectedChat });
+                
+                // Wait for page to load
+                Swal.fire({
+                    title: 'Chat එකට යනවා...',
+                    text: 'Page load වෙනකම් ඉන්න...',
+                    allowOutsideClick: false,
+                    timer: 2500,
+                    timerProgressBar: true,
+                    didOpen: () => { Swal.showLoading(); }
+                });
+                await new Promise(resolve => setTimeout(resolve, 2500));
+            }
+            
+            // Now sync!
+            ipcRenderer.send('sync-context', { 
+                targetAccount: pendingDeltaTarget, 
+                diffText: pendingDeltaText,
+                images: pendingDeltaImages 
+            });
+            
+            // Reset and hide
+            pendingDeltaText = "";
+            pendingDeltaImages = [];
+            pendingDeltaTarget = null;
+            pasteDeltaContainer.style.display = 'none';
+        } catch (err) {
+            console.error('Error during sync FAB click:', err);
+            ipcRenderer.send('show-active-view');
+        } finally {
+            isSyncing = false;
         }
-        
-        // Now sync!
-        ipcRenderer.send('sync-context', { 
-            targetAccount: pendingDeltaTarget, 
-            diffText: pendingDeltaText,
-            images: pendingDeltaImages 
-        });
-        
-        // Reset and hide
-        pendingDeltaText = "";
-        pendingDeltaImages = [];
-        pendingDeltaTarget = null;
-        pasteDeltaContainer.style.display = 'none';
     });
 }
 
 // --- Account Dropdown Logic ---
 accountSelect.addEventListener('change', (e) => {
-    const indexToSwitch = parseInt(e.target.value);
-    if (indexToSwitch !== activeAccountIndex) {
+    const indexToSwitch = parseInt(e.target.value, 10);
+    if (!isNaN(indexToSwitch) && indexToSwitch !== activeAccountIndex) {
         pendingSwitchTarget = indexToSwitch;
+        accountSelect.disabled = true; // Lock dropdown during transition to prevent race conditions
         
         // Hide FAB if showing
         if (pasteDeltaContainer) pasteDeltaContainer.style.display = 'none';
@@ -114,6 +128,25 @@ accountSelect.addEventListener('change', (e) => {
         
         Swal.fire({
             title: 'Syncing Context...',
+            text: 'Extracting chat from current account...',
+            allowOutsideClick: false,
+            didOpen: () => { Swal.showLoading(); }
+        });
+
+        // Safety fallback: If extraction takes longer than 8 seconds, force switch to prevent freezing
+        if (switchTimeoutId) clearTimeout(switchTimeoutId);
+        switchTimeoutId = setTimeout(() => {
+            if (pendingSwitchTarget !== null) {
+                console.warn('Chat extraction timed out. Forcing switch.');
+                Swal.close();
+                accountSelect.disabled = false;
+                ipcRenderer.send('switch-account', pendingSwitchTarget);
+                setTimeout(() => { ipcRenderer.send('show-active-view'); }, 200);
+                pendingSwitchTarget = null;
+            }
+        }, 8000);
+    }
+});ontext...',
             text: 'Extracting chat from current account...',
             allowOutsideClick: false,
             didOpen: () => { Swal.showLoading(); }
@@ -227,16 +260,21 @@ ipcRenderer.on('view-event', (event, data) => {
             
         } else {
             // ===== LEAVING ACCOUNT - CALCULATE DELTA & PROMPT =====
-            const topicKey = `acc${activeAccountIndex}_${viewUrl}`;
+            if (switchTimeoutId) {
+                clearTimeout(switchTimeoutId);
+                switchTimeoutId = null;
+            }
+            
+            const fromAccountIndex = (typeof data.accountIndex === 'number') ? data.accountIndex : activeAccountIndex;
+            const topicKey = `acc${fromAccountIndex}_${viewUrl}`;
             const baseline = arrivedBaselines[topicKey] || 0;
             const baselineImgs = arrivedBaselines[topicKey + '_imgs'] || 0;
             
             // Helper function to show sync button
             function showSyncButton() {
                 if (pasteDeltaContainer && pasteDeltaText && pendingDeltaText) {
-                    var imgCount = pendingDeltaImages.length;
-                    // Count roughly the number of messages being synced
-                    var msgCount = pendingDeltaText.split('\n\n---\n\n').length;
+                    var imgCount = (pendingDeltaImages || []).length;
+                    var msgCount = pendingDeltaText.split('\n\n---\n\n').filter(Boolean).length;
                     var btnLabel = 'Sync Context (' + msgCount + ' msgs';
                     if (imgCount > 0) {
                         btnLabel += ', ' + imgCount + ' imgs';
@@ -250,17 +288,22 @@ ipcRenderer.on('view-event', (event, data) => {
             // Helper function to handle the actual switch and cleanup
             function executeSwitch(targetIndex) {
                 Swal.close();
-                ipcRenderer.send('switch-account', targetIndex);
-                
-                // Show the new BrowserView after switching
-                setTimeout(() => {
+                if (accountSelect) accountSelect.disabled = false; // Re-enable dropdown
+                if (typeof targetIndex === 'number') {
+                    ipcRenderer.send('switch-account', targetIndex);
+                    
+                    // Show the new BrowserView after switching
+                    setTimeout(() => {
+                        ipcRenderer.send('show-active-view');
+                    }, 200);
+                    
+                    // After arriving at new account, record its baseline too
+                    setTimeout(() => {
+                        ipcRenderer.send('request-chat-history', targetIndex);
+                    }, 1500);
+                } else {
                     ipcRenderer.send('show-active-view');
-                }, 200);
-                
-                // After arriving at new account, record its baseline too
-                setTimeout(() => {
-                    ipcRenderer.send('request-chat-history', targetIndex);
-                }, 1500);
+                }
             }
 
             if (currentLength > 0) {
