@@ -6,15 +6,17 @@ let mainWindow;
 let browserViews = [];
 let activeAccountIndex = 0;
 const MAX_ACCOUNTS = 5;
+const MAX_IMAGES_PER_SYNC = 20;
+const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB per image (base64)
 
 // Sync files on Desktop - easy to find, always overwritten
-const SYNC_FILE_PATH = path.join(app.getPath('desktop'), 'context_sync.txt');
-const SYNC_PDF_PATH = path.join(app.getPath('desktop'), 'context_sync_images.pdf');
+const SYNC_FILE_PATH = path.join(app.getPath('desktop'), 'Gemini_App_History.txt');
+const SYNC_PDF_PATH = path.join(app.getPath('desktop'), 'Gemini_App_Media.pdf');
 
 // Persist account count so app remembers added accounts after restart
 const accountCountPath = path.join(app.getPath('userData'), 'account_count.json');
 
-// Default Hardcoded Config (Guarantees appConfig is NEVER null even if offline & file missing)
+// Default Hardcoded Config (Guarantees appConfig is NEVER null even if file missing)
 const FALLBACK_CONFIG = {
     version: 1,
     selectors: {
@@ -34,40 +36,43 @@ const FALLBACK_CONFIG = {
     }
 };
 
-// Global app config for Dynamic Selectors (Remote Config)
+// Global app config for Dynamic Selectors
 let appConfig = FALLBACK_CONFIG;
-const CONFIG_URL = "https://raw.githubusercontent.com/antigravity/gemini-config/main/selectors.json";
 const DEFAULT_CONFIG_PATH = path.join(__dirname, 'default-selectors.json');
 
+// SEC-G3 FIX: Remote config DISABLED — the placeholder URL didn't point to a real repo.
+// If you want remote config, host your own selectors.json and set the URL below:
+// const CONFIG_URL = "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/selectors.json";
+const CONFIG_URL = null;
+
 async function loadAppConfig() {
-    try {
-        console.log('[CONFIG] Fetching remote config from:', CONFIG_URL);
-        const response = await fetch(CONFIG_URL, { signal: AbortSignal.timeout(3000) });
-        if (response.ok) {
-            const fetched = await response.json();
-            if (fetched && fetched.selectors) {
-                appConfig = fetched;
-                console.log('[CONFIG] Successfully loaded remote config version:', appConfig.version);
-                return;
+    // Remote config fetch (only if a real URL is configured)
+    if (CONFIG_URL) {
+        try {
+            const response = await fetch(CONFIG_URL, { signal: AbortSignal.timeout(3000) });
+            if (response.ok) {
+                const fetched = await response.json();
+                // Validate config schema before using
+                if (fetched && fetched.selectors && typeof fetched.selectors === 'object') {
+                    appConfig = fetched;
+                    return;
+                }
             }
+        } catch (e) {
+            // Fallback to local
         }
-    } catch (e) {
-        console.log('[CONFIG] Remote fetch failed or timed out. Falling back to local defaults.');
     }
     
-    // Fallback to local default-selectors.json
+    // Local default-selectors.json
     try {
         if (fs.existsSync(DEFAULT_CONFIG_PATH)) {
             const local = JSON.parse(fs.readFileSync(DEFAULT_CONFIG_PATH, 'utf8'));
             if (local && local.selectors) {
                 appConfig = local;
-                console.log('[CONFIG] Loaded local fallback config version:', appConfig.version);
             }
-        } else {
-            console.log('[CONFIG] default-selectors.json not found, using built-in FALLBACK_CONFIG');
         }
     } catch (e) {
-        console.error('[CONFIG] Error parsing local config, using built-in FALLBACK_CONFIG:', e);
+        // Use built-in FALLBACK_CONFIG
     }
 }
 
@@ -75,14 +80,9 @@ function getSavedAccountCount() {
     try {
         if (fs.existsSync(accountCountPath)) {
             const data = JSON.parse(fs.readFileSync(accountCountPath, 'utf8'));
-            console.log('[ACCOUNTS] Saved count:', data.count);
             return Math.max(2, Math.min(data.count || 2, MAX_ACCOUNTS));
-        } else {
-            console.log('[ACCOUNTS] No saved count file found, defaulting to 2');
         }
-    } catch (e) {
-        console.error('[ACCOUNTS] Error reading account count:', e);
-    }
+    } catch (e) { /* use default */ }
     return 2;
 }
 
@@ -93,10 +93,7 @@ function saveAccountCount(count) {
             fs.mkdirSync(userDataDir, { recursive: true });
         }
         fs.writeFileSync(accountCountPath, JSON.stringify({ count: count }));
-        console.log('[ACCOUNTS] Saved count:', count, 'to:', accountCountPath);
-    } catch (e) {
-        console.error('[ACCOUNTS] Error saving account count:', e);
-    }
+    } catch (e) { /* ignore */ }
 }
 
 // Simple local database for topics
@@ -110,7 +107,6 @@ if (fs.existsSync(dbPath)) {
             topicsDb.topics = [];
         }
     } catch (e) {
-        console.error('Error reading topics.json:', e);
         topicsDb = { topics: [] };
     }
 }
@@ -118,9 +114,7 @@ if (fs.existsSync(dbPath)) {
 function saveDb() {
     try {
         fs.writeFileSync(dbPath, JSON.stringify(topicsDb, null, 2));
-    } catch (e) {
-        console.error('Error writing topics.json:', e);
-    }
+    } catch (e) { /* ignore */ }
 }
 
 function createWindow() {
@@ -128,8 +122,10 @@ function createWindow() {
         width: 1280,
         height: 800,
         webPreferences: {
-            nodeIntegration: true,
-            contextIsolation: false,
+            // SEC-G1 FIX: Secure Electron configuration
+            preload: path.join(__dirname, 'preload-main.js'),
+            nodeIntegration: false,
+            contextIsolation: true,
         },
         title: "Gemini Seamless Multi-Account",
         autoHideMenuBar: true
@@ -137,26 +133,24 @@ function createWindow() {
 
     mainWindow.loadFile('index.html');
 
-    // Initialize accounts - restore saved count (includes previously added accounts)
+    // Initialize accounts - restore saved count
     const savedCount = getSavedAccountCount();
     for (let i = 0; i < savedCount; i++) {
         createBrowserView(i);
     }
 
     mainWindow.on('resize', updateViewBounds);
-    
-    // Set initially active account
     switchAccount(0);
 }
 
 function createBrowserView(index) {
-    if (browserViews[index]) return; // Already exists
+    if (browserViews[index]) return;
 
     const view = new BrowserView({
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
-            partition: 'persist:gemini-account-' + index // Separate sessions for each account
+            partition: 'persist:gemini-account-' + index
         }
     });
 
@@ -203,18 +197,17 @@ function switchAccount(index) {
     }
 }
 
+// SEC-G7 FIX: Helper to validate IPC sender is our main window
+function isFromMainWindow(event) {
+    return mainWindow && !mainWindow.isDestroyed() && event.sender.id === mainWindow.webContents.id;
+}
+
 app.whenReady().then(async () => {
-    // Make the app run automatically when the PC starts (Startup App)
-    try {
-        app.setLoginItemSettings({
-            openAtLogin: true,
-            path: app.getPath("exe")
-        });
-    } catch (e) {
-        console.warn('Could not set login item settings:', e);
-    }
-    
-    await loadAppConfig(); // Load config before creating windows
+    // SEC-G6 FIX: Auto-start DISABLED by default.
+    // Uncomment below if you want the app to start with Windows:
+    // app.setLoginItemSettings({ openAtLogin: true, path: app.getPath("exe") });
+
+    await loadAppConfig();
     createWindow();
 });
 
@@ -224,44 +217,54 @@ app.on('window-all-closed', () => {
     }
 });
 
-// IPC Handlers
+// ========== IPC Handlers ==========
+
 ipcMain.on('switch-account', (event, index) => {
+    if (!isFromMainWindow(event)) return;
     switchAccount(index);
 });
 
-// Provide config to Preload scripts synchronously
 ipcMain.on('get-config', (event) => {
     event.returnValue = appConfig || FALLBACK_CONFIG;
 });
 
-// Temporarily hide/show BrowserView so SweetAlert popups are visible
-ipcMain.on('hide-active-view', () => {
+ipcMain.on('hide-active-view', (event) => {
+    if (!isFromMainWindow(event)) return;
     detachActiveView();
 });
 
-ipcMain.on('show-active-view', () => {
+ipcMain.on('show-active-view', (event) => {
+    if (!isFromMainWindow(event)) return;
     attachActiveView();
 });
 
 ipcMain.on('add-account', (event) => {
+    if (!isFromMainWindow(event)) return;
     const nextIndex = browserViews.length;
     if (nextIndex < MAX_ACCOUNTS) {
         createBrowserView(nextIndex);
-        saveAccountCount(browserViews.length); // Persist the new count!
+        saveAccountCount(browserViews.length);
         mainWindow.webContents.send('account-added', nextIndex);
     }
 });
 
 // ========== SYNC CONTEXT (FILE-BASED) ==========
 ipcMain.on('sync-context', async (event, data) => {
+    if (!isFromMainWindow(event)) return;
     const { targetAccount, diffText, images } = data || {};
-    const imgArray = images || [];
+    
+    // SEC-G10 FIX: Limit image count and size
+    const rawImgs = images || [];
+    const imgArray = rawImgs.slice(0, MAX_IMAGES_PER_SYNC).filter(function(img) {
+        return img && img.data && typeof img.data === 'string' && img.data.length < MAX_IMAGE_SIZE_BYTES;
+    });
+    
     const targetView = browserViews[targetAccount];
     if (!targetView) return;
 
     let pdfWin = null;
     try {
-        // Focus the editor first (Dynamic Remote Config)
+        // Focus the editor (Dynamic Config)
         await targetView.webContents.executeJavaScript(
             '(function() {' +
             '  var config = ' + JSON.stringify(appConfig.selectors) + ';' +
@@ -278,8 +281,9 @@ ipcMain.on('sync-context', async (event, data) => {
         );
 
         // Save text context safely
-        fs.writeFileSync(SYNC_FILE_PATH, diffText || "", 'utf8');
-        console.log('Context sync text file written to:', SYNC_FILE_PATH);
+        try {
+            fs.writeFileSync(SYNC_FILE_PATH, diffText || "", 'utf8');
+        } catch (e) { /* ignore file write error */ }
         
         let hasPdf = false;
         
@@ -297,7 +301,8 @@ ipcMain.on('sync-context', async (event, data) => {
             htmlParts.push('<h1 style="color: #10a37f; margin-bottom: 30px;">Chat Images Reference</h1>');
             
             imgArray.forEach(function(img) {
-                const safeName = String(img.name || 'Image').replace(/[<>&]/g, '');
+                // SEC-G4: Sanitize image name to prevent HTML injection
+                var safeName = String(img.name || 'Image').replace(/[<>&"']/g, '');
                 htmlParts.push('<div class="image-container">');
                 htmlParts.push('<h2>[' + safeName + ']</h2>');
                 htmlParts.push('<img src="' + img.data + '" />');
@@ -307,11 +312,9 @@ ipcMain.on('sync-context', async (event, data) => {
             htmlParts.push('</body></html>');
             var htmlString = htmlParts.join('\n');
 
-            // Create a hidden window to render the HTML to PDF safely with try/finally
             pdfWin = new BrowserWindow({ show: false });
             await pdfWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(htmlString));
             
-            // Wait briefly to ensure images (base64) are rendered
             await new Promise(function(resolve) { setTimeout(resolve, 1500); });
             
             const pdfBuffer = await pdfWin.webContents.printToPDF({
@@ -319,16 +322,17 @@ ipcMain.on('sync-context', async (event, data) => {
                 pageSize: 'A4'
             });
             
-            fs.writeFileSync(SYNC_PDF_PATH, pdfBuffer);
-            console.log('Context sync PDF file written to:', SYNC_PDF_PATH);
+            try {
+                fs.writeFileSync(SYNC_PDF_PATH, pdfBuffer);
+            } catch (e) { /* ignore */ }
         }
 
-        // Type the prompt (does NOT auto-send, waits for user to attach files and press Send)
+        // Type the prompt
         var promptText;
         if (hasPdf) {
-            promptText = "කරුණාකරලා මේ attach කරපු ෆයිල් 2කම බලන්න. .txt ෆයිල් එකේ තියෙන Chat history එක කියවලා, ඒකේ නැවතුණ තැන ඉඳන් කතා කරන්න. පින්තූර ගැන සඳහනක් තිබුණොත්, අනිත් PDF එකෙන් ඒ අදාළ පින්තූරය බලන්න.";
+            promptText = "\u0d9a\u0dbb\u0dd4\u0dab\u0dcf\u0d9a\u0dbb\u0dbd\u0dcf \u0db8\u0dda attach \u0d9a\u0dbb\u0db4\u0dd4 \u0dc6\u0dba\u0dd2\u0dbd\u0dca 2\u0d9a\u0db8 \u0db6\u0dbd\u0db1\u0dca\u0db1. .txt \u0dc6\u0dba\u0dd2\u0dbd\u0dca \u0d91\u0d9a\u0dda \u0dad\u0dd2\u0dba\u0dd9\u0db1 Chat history \u0d91\u0d9a \u0d9a\u0dd2\u0dba\u0dc0\u0dbd\u0dcf, \u0d91\u0d9a\u0dda \u0db1\u0dd0\u0dc0\u0dad\u0dd4\u0dab \u0dad\u0dd0\u0db1 \u0d89\u0daf\u0db1\u0dca \u0d9a\u0dad\u0dcf \u0d9a\u0dbb\u0db1\u0dca\u0db1. \u0db4\u0dd2\u0db1\u0dca\u0dad\u0dd6\u0dbb \u0d9c\u0dd0\u0db1 \u0dc3\u0db3\u0dc4\u0db1\u0d9a\u0dca \u0dad\u0dd2\u0db6\u0dd4\u0dab\u0ddc\u0dad\u0dca, \u0d85\u0db1\u0dd2\u0dad\u0dca PDF \u0d91\u0d9a\u0dd9\u0db1\u0dca \u0d91\u0dda \u0d85\u0daf\u0dcf\u0dc5 \u0db4\u0dd2\u0db1\u0dca\u0dad\u0dd6\u0dbb\u0dba \u0db6\u0dbd\u0db1\u0dca\u0db1.";
         } else {
-            promptText = "කරුණාකරලා මේ attach කරපු ෆයිල් එකේ තියෙන Chat history එක කියවලා, ඒකේ නැවතුණ තැන ඉඳන් කතා කරන්න.";
+            promptText = "\u0d9a\u0dbb\u0dd4\u0dab\u0dcf\u0d9a\u0dbb\u0dbd\u0dcf \u0db8\u0dda attach \u0d9a\u0dbb\u0db4\u0dd4 \u0dc6\u0dba\u0dd2\u0dbd\u0dca \u0d91\u0d9a\u0dda \u0dad\u0dd2\u0dba\u0dd9\u0db1 Chat history \u0d91\u0d9a \u0d9a\u0dd2\u0dba\u0dc0\u0dbd\u0dcf, \u0d91\u0d9a\u0dda \u0db1\u0dd0\u0dc0\u0dad\u0dd4\u0dab \u0dad\u0dd0\u0db1 \u0d89\u0daf\u0db1\u0dca \u0d9a\u0dad\u0dcf \u0d9a\u0dbb\u0db1\u0dca\u0db1.";
         }
             
         setTimeout(function() {
@@ -337,7 +341,7 @@ ipcMain.on('sync-context', async (event, data) => {
             }
         }, 300);
 
-        // Notify renderer to show popup with manual instructions
+        // Notify renderer
         if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('file-ready', { 
                 textPath: SYNC_FILE_PATH,
@@ -345,7 +349,7 @@ ipcMain.on('sync-context', async (event, data) => {
             });
         }
     } catch (e) {
-        console.error('Failed to sync context:', e);
+        // Sync failed silently
     } finally {
         if (pdfWin && !pdfWin.isDestroyed()) {
             pdfWin.destroy();
@@ -353,7 +357,6 @@ ipcMain.on('sync-context', async (event, data) => {
     }
 });
 
-// Open file explorer to show the sync file
 ipcMain.on('open-sync-folder', () => {
     shell.showItemInFolder(SYNC_FILE_PATH);
 });
@@ -385,14 +388,17 @@ ipcMain.handle('get-chat-list', async (event, accountIndex) => {
         );
         return items;
     } catch (e) {
-        console.error('Failed to get chat list:', e);
         return [];
     }
 });
 
-// Navigate a specific account's view to a URL
+// SEC-G9 FIX: URL whitelist — only allow Gemini URLs
 ipcMain.on('navigate-view', (event, data) => {
+    if (!isFromMainWindow(event)) return;
     const { accountIndex, url } = data;
+    if (!url || typeof url !== 'string' || !url.startsWith('https://gemini.google.com/')) {
+        return; // Block non-Gemini URLs
+    }
     const view = browserViews[accountIndex];
     if (view) {
         view.webContents.loadURL(url);
@@ -409,7 +415,7 @@ ipcMain.on('request-chat-history', async (event, accountIndex) => {
         return;
     }
 
-    const viewUrl = view.webContents.getURL(); // Current URL = topic identifier
+    const viewUrl = view.webContents.getURL();
 
     try {
         const blocks = await view.webContents.executeJavaScript(
@@ -439,7 +445,6 @@ ipcMain.on('request-chat-history', async (event, accountIndex) => {
             '        reader.readAsDataURL(blob);' +
             '      });' +
             '    } catch (e) {' +
-            '      console.log("[SYNC DEBUG] getBase64 failed for:", url, e);' +
             '      return null;' +
             '    }' +
             '  }' +
@@ -453,12 +458,9 @@ ipcMain.on('request-chat-history', async (event, accountIndex) => {
             '      ctx.drawImage(imgEl, 0, 0);' +
             '      return canvas.toDataURL("image/png");' +
             '    } catch (e) {' +
-            '      console.log("[SYNC DEBUG] imgToCanvas failed:", e);' +
             '      return null;' +
             '    }' +
             '  }' +
-            '' +
-            '  console.log("[SYNC DEBUG] Total unique nodes:", uniqueNodes.length);' +
             '' +
             '  for (const el of uniqueNodes) {' +
             '    let role = "AI";' +
@@ -473,8 +475,6 @@ ipcMain.on('request-chat-history', async (event, accountIndex) => {
             '    const originalImgs = Array.from(el.querySelectorAll("img"));' +
             '    const cloneImgs = Array.from(clone.querySelectorAll("img"));' +
             '' +
-            '    console.log("[SYNC DEBUG] Node:", tag, "has", originalImgs.length, "img tags");' +
-            '' +
             '    for (let i = 0; i < originalImgs.length; i++) {' +
             '      const originalImg = originalImgs[i];' +
             '      const cloneImg = cloneImgs[i];' +
@@ -485,7 +485,6 @@ ipcMain.on('request-chat-history', async (event, accountIndex) => {
             '        continue;' +
             '      }' +
             '      const src = originalImg.src;' +
-            '      console.log("[SYNC DEBUG] Found img src type:", src ? src.substring(0, 30) : "null", "size:", originalImg.width, "x", originalImg.height);' +
             '' +
             '      var base64 = null;' +
             '      if (src && src.startsWith("data:image")) {' +
@@ -499,14 +498,12 @@ ipcMain.on('request-chat-history', async (event, accountIndex) => {
             '      }' +
             '' +
             '      if (base64) {' +
-            '        console.log("[SYNC DEBUG] Successfully extracted Image", imageCounter);' +
-            '        var label = "\\n[Attached PDF හි Image " + imageCounter + " බලන්න]\\n";' +
+            '        var label = "\\n[Attached PDF Image " + imageCounter + "]\\n";' +
             '        extractedImages.push({ name: "Image " + imageCounter, data: base64 });' +
             '        var textNode = document.createTextNode(label);' +
             '        cloneImg.parentNode.replaceChild(textNode, cloneImg);' +
             '        imageCounter++;' +
             '      } else {' +
-            '        console.log("[SYNC DEBUG] Could not extract image, removing");' +
             '        cloneImg.remove();' +
             '      }' +
             '    }' +
@@ -519,8 +516,6 @@ ipcMain.on('request-chat-history', async (event, accountIndex) => {
             '    }' +
             '  }' +
             '' +
-            '  console.log("[SYNC DEBUG] Total images extracted:", extractedImages.length);' +
-            '  console.log("[SYNC DEBUG] Total text blocks:", result.length);' +
             '  var dedupedResult = [...new Set(result)];' +
             '  return { chatBlocks: dedupedResult, images: extractedImages };' +
             '})()'
@@ -535,7 +530,6 @@ ipcMain.on('request-chat-history', async (event, accountIndex) => {
             });
         }
     } catch (e) {
-        console.error("Execute JS failed", e);
         if (mainWindow && mainWindow.webContents) {
             mainWindow.webContents.send('view-event', { type: 'chat-history-data', blocks: [], accountIndex: accountIndex, viewUrl: viewUrl });
         }
@@ -551,7 +545,6 @@ ipcMain.on('from-preload-to-main', (event, data) => {
             mainWindow.webContents.send('view-event', data);
         }
     } else {
-        console.warn("Could not find matching browser view for sender:", event.sender.id);
         if (mainWindow && mainWindow.webContents) {
              mainWindow.webContents.send('view-event', { type: 'chat-history-data', blocks: [], accountIndex: 0, viewUrl: 'default' });
         }
@@ -560,13 +553,18 @@ ipcMain.on('from-preload-to-main', (event, data) => {
 
 // ========== TOPICS ==========
 ipcMain.on('navigate-topic', (event, data) => {
+    if (!isFromMainWindow(event)) return;
     const { topicId } = data;
     const topic = topicsDb.topics.find(t => t.id === topicId);
     
     if (topic) {
         browserViews.forEach((view, idx) => {
             if (view && topic.urls && topic.urls[idx]) {
-                view.webContents.loadURL(topic.urls[idx]);
+                // SEC-G9: Validate topic URL
+                var topicUrl = topic.urls[idx];
+                if (typeof topicUrl === 'string' && topicUrl.startsWith('https://gemini.google.com/')) {
+                    view.webContents.loadURL(topicUrl);
+                }
             } else if (view) {
                 view.webContents.loadURL('https://gemini.google.com/app');
             }
@@ -579,6 +577,7 @@ ipcMain.on('navigate-topic', (event, data) => {
 });
 
 ipcMain.on('save-topic-url', (event, data) => {
+    if (!isFromMainWindow(event)) return;
     const { topicId, accountIndex, url } = data;
     let topic = topicsDb.topics.find(t => t.id === topicId);
     if (!topic) {

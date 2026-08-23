@@ -12,21 +12,26 @@ const regexStr = regexConfig.limitReset || "try again at ([\\d:]+\\s[AP]M)";
 const limitRegex = new RegExp(regexStr, "i");
 const limitMsgs = regexConfig.limitMessages || ["You've reached your limit", "limit reached"];
 
-// Inject custom CSS dynamically based on Remote Config
+// SEC-G4 FIX: Sanitize CSS selectors to prevent CSS injection
+function sanitizeSelector(str) {
+    if (!str || typeof str !== 'string') return '';
+    // Remove dangerous CSS patterns: closing braces, url(), @import, expression(), javascript:
+    return str.replace(/[{}]/g, '').replace(/url\s*\(/gi, '').replace(/@import/gi, '').replace(/expression\s*\(/gi, '').replace(/javascript:/gi, '');
+}
+
+// Inject custom CSS dynamically based on Config
 function injectStyles() {
     if (document.getElementById('antigravity-custom-styles')) return;
+    var sidebarSel = sanitizeSelector(selectors.sidebarElements || 'navigation-drawer');
+    var hamburgerSel = sanitizeSelector(selectors.hamburgerMenu || '.hamburger-menu');
+    var mainSel = sanitizeSelector(selectors.mainContent || 'main');
+    
     const style = document.createElement('style');
     style.id = 'antigravity-custom-styles';
-    style.innerHTML = `
-        /* Hide native sidebar elements robustly */
-        ${selectors.sidebarElements || 'navigation-drawer'} { display: none !important; width: 0 !important; }
-        
-        /* Hide the hamburger menu in the header */
-        ${selectors.hamburgerMenu || '.hamburger-menu'} { display: none !important; }
-        
-        /* Ensure chat container takes full space */
-        ${selectors.mainContent || 'main'} { width: 100% !important; max-width: none !important; margin: 0 !important; padding: 0 !important; }
-    `;
+    style.textContent = 
+        sidebarSel + ' { display: none !important; width: 0 !important; } ' +
+        hamburgerSel + ' { display: none !important; } ' +
+        mainSel + ' { width: 100% !important; max-width: none !important; margin: 0 !important; padding: 0 !important; }';
     if (document.head) {
         document.head.appendChild(style);
     } else {

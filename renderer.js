@@ -1,4 +1,5 @@
-const { ipcRenderer } = require('electron');
+// renderer.js — Uses window.electronAPI (exposed via contextBridge in preload-main.js)
+// SEC-G1 FIX: No more require('electron') — uses secure contextBridge API only
 
 // DOM Elements
 const accountSelect = document.getElementById('account-select');
@@ -11,7 +12,7 @@ const topicList = document.getElementById('topic-list');
 // State
 let activeAccountIndex = 0;
 let totalAccounts = 2;
-let limits = {}; // { accountIndex: resetTime }
+let limits = {};
 
 // Topic-aware baselines: key = "acc{index}_{url}" -> block count when we arrived
 let arrivedBaselines = {};
@@ -22,7 +23,7 @@ let pendingDeltaImages = [];
 let pendingDeltaTarget = null;
 
 // Initialize
-ipcRenderer.invoke('get-accounts-count').then(count => {
+window.electronAPI.getAccountsCount().then(function(count) {
     totalAccounts = count;
     renderAccountList();
 });
@@ -33,77 +34,68 @@ let switchTimeoutId = null;
 
 // --- FAB Sync Button Click (with topic selection) ---
 if (pasteDeltaContainer) {
-    pasteDeltaContainer.addEventListener('click', async () => {
+    pasteDeltaContainer.addEventListener('click', async function() {
         if (isSyncing || pendingDeltaTarget === null || pendingDeltaText === "") return;
         isSyncing = true;
         
         try {
-            // Hide BrowserView so popup is visible (BrowserView sits on top of HTML)
-            ipcRenderer.send('hide-active-view');
+            window.electronAPI.hideActiveView();
             
-            // Get list of chats from TARGET account's sidebar
-            const chatList = await ipcRenderer.invoke('get-chat-list', pendingDeltaTarget);
+            var chatList = await window.electronAPI.getChatList(pendingDeltaTarget);
             
-            // Build selection options
-            let inputOptions = { '__current__': '📌 දැනට open chat එක (Current Chat)' };
+            var inputOptions = { '__current__': '\uD83D\uDCCC \u0DAF\u0DD0\u0DB1\u0DA7 open chat \u0D91\u0D9A (Current Chat)' };
             if (Array.isArray(chatList)) {
-                chatList.forEach((chat) => {
-                    inputOptions[chat.url] = '💬 ' + chat.title;
+                chatList.forEach(function(chat) {
+                    inputOptions[chat.url] = '\uD83D\uDCAC ' + chat.title;
                 });
             }
             
-            // Show topic selection popup
-            const { value: selectedChat } = await Swal.fire({
-                title: '🎯 Chat එකක් තෝරන්න',
-                html: `<p style="text-align:left;">Account ${pendingDeltaTarget + 1} එකේ <b>මොන chat එකටද</b> context sync කරන්න ඕනේ?</p>`,
+            var result = await Swal.fire({
+                title: '\uD83C\uDFAF Chat \u0D91\u0D9A\u0D9A\u0DCA \u0DAD\u0DDD\u0DBB\u0DB1\u0DCA\u0DB1',
+                html: '<p style="text-align:left;">Account ' + (pendingDeltaTarget + 1) + ' \u0D91\u0D9A\u0DDA <b>\u0DB8\u0DDD\u0DB1 chat \u0D91\u0D9A\u0DA7\u0DAF</b> context sync \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1 \u0D95\u0DB1\u0DDA?</p>',
                 input: 'select',
                 inputOptions: inputOptions,
                 inputValue: '__current__',
                 showCancelButton: true,
-                confirmButtonText: '✅ Sync කරන්න',
-                cancelButtonText: 'අවලංගු කරන්න',
+                confirmButtonText: '\u2705 Sync \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1',
+                cancelButtonText: '\u0D85\u0DC0\u0DBD\u0D82\u0D9C\u0DD4 \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1',
                 confirmButtonColor: '#10a37f',
-                inputValidator: (value) => {
-                    if (!value) return 'කරුණාකරලා chat එකක් තෝරන්න!';
+                inputValidator: function(value) {
+                    if (!value) return '\u0D9A\u0DBB\u0DD4\u0DAB\u0DCF\u0D9A\u0DBB\u0DBD\u0DCF chat \u0D91\u0D9A\u0D9A\u0DCA \u0DAD\u0DDD\u0DBB\u0DB1\u0DCA\u0DB1!';
                 }
             });
             
-            // Show BrowserView back
-            ipcRenderer.send('show-active-view');
+            window.electronAPI.showActiveView();
             
-            if (!selectedChat) return; // User cancelled
+            var selectedChat = result.value;
+            if (!selectedChat) return;
             
-            // Navigate to selected chat if it's not "current"
             if (selectedChat !== '__current__') {
-                ipcRenderer.send('navigate-view', { accountIndex: pendingDeltaTarget, url: selectedChat });
+                window.electronAPI.navigateView({ accountIndex: pendingDeltaTarget, url: selectedChat });
                 
-                // Wait for page to load
                 Swal.fire({
-                    title: 'Chat එකට යනවා...',
-                    text: 'Page load වෙනකම් ඉන්න...',
+                    title: 'Chat \u0D91\u0D9A\u0DA7 \u0DBA\u0DB1\u0DC0\u0DCF...',
+                    text: 'Page load \u0DC0\u0DD9\u0DB1\u0D9A\u0DB8\u0DCA \u0D89\u0DB1\u0DCA\u0DB1...',
                     allowOutsideClick: false,
                     timer: 2500,
                     timerProgressBar: true,
-                    didOpen: () => { Swal.showLoading(); }
+                    didOpen: function() { Swal.showLoading(); }
                 });
-                await new Promise(resolve => setTimeout(resolve, 2500));
+                await new Promise(function(resolve) { setTimeout(resolve, 2500); });
             }
             
-            // Now sync!
-            ipcRenderer.send('sync-context', { 
+            window.electronAPI.syncContext({ 
                 targetAccount: pendingDeltaTarget, 
                 diffText: pendingDeltaText,
                 images: pendingDeltaImages 
             });
             
-            // Reset and hide
             pendingDeltaText = "";
             pendingDeltaImages = [];
             pendingDeltaTarget = null;
             pasteDeltaContainer.style.display = 'none';
         } catch (err) {
-            console.error('Error during sync FAB click:', err);
-            ipcRenderer.send('show-active-view');
+            window.electronAPI.showActiveView();
         } finally {
             isSyncing = false;
         }
@@ -111,84 +103,72 @@ if (pasteDeltaContainer) {
 }
 
 // --- Account Dropdown Logic ---
-accountSelect.addEventListener('change', (e) => {
-    const indexToSwitch = parseInt(e.target.value, 10);
+accountSelect.addEventListener('change', function(e) {
+    var indexToSwitch = parseInt(e.target.value, 10);
     if (!isNaN(indexToSwitch) && indexToSwitch !== activeAccountIndex) {
         pendingSwitchTarget = indexToSwitch;
-        accountSelect.disabled = true; // Lock dropdown during transition to prevent race conditions
+        accountSelect.disabled = true;
         
-        // Hide FAB if showing
         if (pasteDeltaContainer) pasteDeltaContainer.style.display = 'none';
         
-        // Hide the BrowserView so popups are visible to the user
-        ipcRenderer.send('hide-active-view');
-        
-        // Extract chat from CURRENT account before leaving
-        ipcRenderer.send('request-chat-history', activeAccountIndex);
+        window.electronAPI.hideActiveView();
+        window.electronAPI.requestChatHistory(activeAccountIndex);
         
         Swal.fire({
             title: 'Syncing Context...',
             text: 'Extracting chat from current account...',
             allowOutsideClick: false,
-            didOpen: () => { Swal.showLoading(); }
+            didOpen: function() { Swal.showLoading(); }
         });
 
-        // Safety fallback: If extraction takes longer than 8 seconds, force switch to prevent freezing
         if (switchTimeoutId) clearTimeout(switchTimeoutId);
-        switchTimeoutId = setTimeout(() => {
+        switchTimeoutId = setTimeout(function() {
             if (pendingSwitchTarget !== null) {
-                console.warn('Chat extraction timed out. Forcing switch.');
                 Swal.close();
                 accountSelect.disabled = false;
-                ipcRenderer.send('switch-account', pendingSwitchTarget);
-                setTimeout(() => { ipcRenderer.send('show-active-view'); }, 200);
+                window.electronAPI.switchAccount(pendingSwitchTarget);
+                setTimeout(function() { window.electronAPI.showActiveView(); }, 200);
                 pendingSwitchTarget = null;
             }
         }, 8000);
     }
-});ontext...',
-            text: 'Extracting chat from current account...',
-            allowOutsideClick: false,
-            didOpen: () => { Swal.showLoading(); }
-        });
-    }
 });
 
-addAccountBtn.addEventListener('click', () => {
+addAccountBtn.addEventListener('click', function() {
     if (totalAccounts < 5) {
-        ipcRenderer.send('add-account');
+        window.electronAPI.addAccount();
     } else {
         Swal.fire('Limit Reached', 'You can only add up to 5 accounts.', 'info');
     }
 });
 
-ipcRenderer.on('account-added', (event, newIndex) => {
+window.electronAPI.onAccountAdded(function(newIndex) {
     totalAccounts = newIndex + 1;
     renderAccountList();
     Swal.fire({
         toast: true,
         position: 'top-end',
         icon: 'success',
-        title: `Account ${newIndex + 1} added!`,
+        title: 'Account ' + (newIndex + 1) + ' added!',
         showConfirmButton: false,
         timer: 2000
     });
 });
 
-ipcRenderer.on('account-switched', (event, index) => {
+window.electronAPI.onAccountSwitched(function(index) {
     activeAccountIndex = index;
     renderAccountList();
 });
 
 function renderAccountList() {
     accountSelect.innerHTML = '';
-    for (let i = 0; i < totalAccounts; i++) {
-        const option = document.createElement('option');
+    for (var i = 0; i < totalAccounts; i++) {
+        var option = document.createElement('option');
         option.value = i;
         
-        let text = `Account ${i + 1}`;
+        var text = 'Account ' + (i + 1);
         if (limits[i]) {
-            text += ` (Limited - Resets at ${limits[i]})`;
+            text += ' (Limited - Resets at ' + limits[i] + ')';
         }
         option.innerText = text;
         
@@ -199,23 +179,23 @@ function renderAccountList() {
 }
 
 // --- Topic Sidebar Logic ---
-newChatBtn.addEventListener('click', () => {
-    const newId = 'topic_' + Date.now();
-    ipcRenderer.send('navigate-topic', { topicId: newId });
+newChatBtn.addEventListener('click', function() {
+    var newId = 'topic_' + Date.now();
+    window.electronAPI.navigateTopic({ topicId: newId });
     loadTopics();
 });
 
 async function loadTopics() {
-    const topics = await ipcRenderer.invoke('get-topics');
+    var topics = await window.electronAPI.getTopics();
     topicList.innerHTML = '';
     
-    topics.forEach(topic => {
-        const li = document.createElement('li');
+    topics.forEach(function(topic) {
+        var li = document.createElement('li');
         li.innerText = topic.id.replace('topic_', 'Chat ');
         li.className = 'topic-item';
-        li.addEventListener('click', () => {
-            ipcRenderer.send('navigate-topic', { topicId: topic.id });
-            document.querySelectorAll('.topic-item').forEach(el => el.classList.remove('active'));
+        li.addEventListener('click', function() {
+            window.electronAPI.navigateTopic({ topicId: topic.id });
+            document.querySelectorAll('.topic-item').forEach(function(el) { el.classList.remove('active'); });
             li.classList.add('active');
         });
         topicList.appendChild(li);
@@ -223,38 +203,35 @@ async function loadTopics() {
 }
 
 // --- Main Event Handler ---
-ipcRenderer.on('view-event', (event, data) => {
+window.electronAPI.onViewEvent(function(data) {
     if (data.type === 'limit-reached') {
-        const resetTime = data.resetTime;
+        var resetTime = data.resetTime;
         limits[data.accountIndex] = resetTime;
         renderAccountList();
         
         if (data.accountIndex === activeAccountIndex) {
-            // Hide BrowserView so popup is visible
-            ipcRenderer.send('hide-active-view');
+            window.electronAPI.hideActiveView();
             Swal.fire({
                 title: 'Limit Reached!',
-                text: `This account is limited. Resets at ${resetTime}. Please select another account from the top menu.`,
+                text: 'This account is limited. Resets at ' + resetTime + '. Please select another account from the top menu.',
                 icon: 'warning'
-            }).then(() => {
-                ipcRenderer.send('show-active-view');
+            }).then(function() {
+                window.electronAPI.showActiveView();
             });
         }
 
     } else if (data.type === 'chat-history-data') {
-        const payload = data.blocks || { chatBlocks: [], images: [] };
-        // Handle old array format fallback just in case
-        const isLegacy = Array.isArray(data.blocks);
-        const blocks = isLegacy ? data.blocks : (payload.chatBlocks || []);
-        const images = isLegacy ? [] : (payload.images || []);
-        const currentImagesLength = images.length;
-        const viewUrl = data.viewUrl || 'default';
-        
-        const currentLength = blocks.length;
+        var payload = data.blocks || { chatBlocks: [], images: [] };
+        var isLegacy = Array.isArray(data.blocks);
+        var blocks = isLegacy ? data.blocks : (payload.chatBlocks || []);
+        var images = isLegacy ? [] : (payload.images || []);
+        var currentImagesLength = images.length;
+        var viewUrl = data.viewUrl || 'default';
+        var currentLength = blocks.length;
         
         if (pendingSwitchTarget === null) {
             // ===== BASELINE RECORDING =====
-            const topicKey = `acc${data.accountIndex}_${viewUrl}`;
+            var topicKey = 'acc' + data.accountIndex + '_' + viewUrl;
             arrivedBaselines[topicKey] = currentLength;
             arrivedBaselines[topicKey + '_imgs'] = currentImagesLength;
             
@@ -265,12 +242,11 @@ ipcRenderer.on('view-event', (event, data) => {
                 switchTimeoutId = null;
             }
             
-            const fromAccountIndex = (typeof data.accountIndex === 'number') ? data.accountIndex : activeAccountIndex;
-            const topicKey = `acc${fromAccountIndex}_${viewUrl}`;
-            const baseline = arrivedBaselines[topicKey] || 0;
-            const baselineImgs = arrivedBaselines[topicKey + '_imgs'] || 0;
+            var fromAccountIndex = (typeof data.accountIndex === 'number') ? data.accountIndex : activeAccountIndex;
+            var topicKey = 'acc' + fromAccountIndex + '_' + viewUrl;
+            var baseline = arrivedBaselines[topicKey] || 0;
+            var baselineImgs = arrivedBaselines[topicKey + '_imgs'] || 0;
             
-            // Helper function to show sync button
             function showSyncButton() {
                 if (pasteDeltaContainer && pasteDeltaText && pendingDeltaText) {
                     var imgCount = (pendingDeltaImages || []).length;
@@ -285,63 +261,55 @@ ipcRenderer.on('view-event', (event, data) => {
                 }
             }
 
-            // Helper function to handle the actual switch and cleanup
             function executeSwitch(targetIndex) {
                 Swal.close();
-                if (accountSelect) accountSelect.disabled = false; // Re-enable dropdown
+                if (accountSelect) accountSelect.disabled = false;
                 if (typeof targetIndex === 'number') {
-                    ipcRenderer.send('switch-account', targetIndex);
+                    window.electronAPI.switchAccount(targetIndex);
                     
-                    // Show the new BrowserView after switching
-                    setTimeout(() => {
-                        ipcRenderer.send('show-active-view');
+                    setTimeout(function() {
+                        window.electronAPI.showActiveView();
                     }, 200);
                     
-                    // After arriving at new account, record its baseline too
-                    setTimeout(() => {
-                        ipcRenderer.send('request-chat-history', targetIndex);
+                    setTimeout(function() {
+                        window.electronAPI.requestChatHistory(targetIndex);
                     }, 1500);
                 } else {
-                    ipcRenderer.send('show-active-view');
+                    window.electronAPI.showActiveView();
                 }
             }
 
             if (currentLength > 0) {
-                const savedSwitchTarget = pendingSwitchTarget; // Save before async!
-                const newMsgsCount = currentLength - baseline;
-                const hasNewOnly = (baseline > 0 && newMsgsCount > 0 && newMsgsCount < currentLength);
+                var savedSwitchTarget = pendingSwitchTarget;
+                var newMsgsCount = currentLength - baseline;
+                var hasNewOnly = (baseline > 0 && newMsgsCount > 0 && newMsgsCount < currentLength);
                 
-                Swal.close(); // Close the loading popup before showing the options
+                Swal.close();
                 
                 if (hasNewOnly) {
-                    // We have a baseline AND there are NEW messages beyond it.
-                    // Show choice: ALL vs NEW
                     Swal.fire({
                         title: 'Sync Options',
-                        text: `You have ${newMsgsCount} new messages (total ${currentLength}). Sync the ENTIRE chat or ONLY the NEW messages?`,
+                        text: 'You have ' + newMsgsCount + ' new messages (total ' + currentLength + '). Sync the ENTIRE chat or ONLY the NEW messages?',
                         icon: 'question',
                         showCancelButton: true,
                         showDenyButton: true,
-                        confirmButtonText: `Sync ALL (${currentLength})`,
-                        denyButtonText: `Sync NEW (${newMsgsCount})`,
+                        confirmButtonText: 'Sync ALL (' + currentLength + ')',
+                        denyButtonText: 'Sync NEW (' + newMsgsCount + ')',
                         cancelButtonText: 'Skip',
                         reverseButtons: false,
                         allowOutsideClick: false
-                    }).then((result) => {
+                    }).then(function(result) {
                         if (result.isConfirmed) {
-                            // Sync ALL
                             pendingDeltaText = blocks.join('\n\n---\n\n');
                             pendingDeltaImages = images;
                             pendingDeltaTarget = savedSwitchTarget;
                             showSyncButton();
                         } else if (result.isDenied) {
-                            // Sync NEW only
                             pendingDeltaText = blocks.slice(baseline).join('\n\n---\n\n');
                             pendingDeltaImages = images.slice(baselineImgs);
                             pendingDeltaTarget = savedSwitchTarget;
                             showSyncButton();
                         }
-                        // If cancelled (Skip), don't sync anything
                         
                         arrivedBaselines[topicKey] = currentLength;
                         arrivedBaselines[topicKey + '_imgs'] = currentImagesLength;
@@ -349,24 +317,21 @@ ipcRenderer.on('view-event', (event, data) => {
                         pendingSwitchTarget = null;
                     });
                 } else {
-                    // No baseline OR no new messages beyond baseline.
-                    // Show choice: Sync ALL or Skip
                     Swal.fire({
                         title: 'Sync Context?',
-                        text: `${currentLength} messages found. Sync the entire chat to the next account?`,
+                        text: currentLength + ' messages found. Sync the entire chat to the next account?',
                         icon: 'question',
                         showCancelButton: true,
-                        confirmButtonText: `Sync ALL (${currentLength})`,
+                        confirmButtonText: 'Sync ALL (' + currentLength + ')',
                         cancelButtonText: 'Skip',
                         allowOutsideClick: false
-                    }).then((result) => {
+                    }).then(function(result) {
                         if (result.isConfirmed) {
                             pendingDeltaText = blocks.join('\n\n---\n\n');
                             pendingDeltaImages = images;
                             pendingDeltaTarget = savedSwitchTarget;
                             showSyncButton();
                         }
-                        // If cancelled (Skip), don't sync anything
                         
                         arrivedBaselines[topicKey] = currentLength;
                         arrivedBaselines[topicKey + '_imgs'] = currentImagesLength;
@@ -375,7 +340,6 @@ ipcRenderer.on('view-event', (event, data) => {
                     });
                 }
             } else {
-                // Nothing to sync
                 executeSwitch(pendingSwitchTarget);
                 pendingSwitchTarget = null;
             }
@@ -386,45 +350,43 @@ ipcRenderer.on('view-event', (event, data) => {
     }
 });
 
-// --- File Ready Popup (for large context syncs) ---
-ipcRenderer.on('file-ready', (event, data) => {
+// --- File Ready Popup ---
+window.electronAPI.onFileReady(function(data) {
     var fileInfo = '';
     if (data.pdfPath) {
-        fileInfo = 'ෆයිල් 2කම (txt එකයි pdf එකයි)';
+        fileInfo = '\u0DC6\u0DBA\u0DD2\u0DBD\u0DCA 2\u0D9A\u0DB8 (txt \u0D91\u0D9A\u0DBA\u0DD2 pdf \u0D91\u0D9A\u0DBA\u0DD2)';
     } else {
-        fileInfo = 'context_sync.txt ෆයිල් එක';
+        fileInfo = 'context_sync.txt \u0DC6\u0DBA\u0DD2\u0DBD\u0DCA \u0D91\u0D9A';
     }
     
     var pdfLine = '';
     if (data.pdfPath) {
-        pdfLine = '<br>🖼️ PDF File: <code style="font-size:10px;">' + data.pdfPath + '</code>';
+        pdfLine = '<br>\uD83D\uDDBC\uFE0F PDF File: <code style="font-size:10px;">' + data.pdfPath + '</code>';
     }
 
     var htmlContent = '<div style="text-align:left; font-size:14px;">' +
-        '<p>Chat history එක Desktop එකට Save වුණා! දැන් මේ පියවර අනුගමනය කරන්න:</p>' +
+        '<p>Chat history \u0D91\u0D9A Desktop \u0D91\u0D9A\u0DA7 Save \u0DC0\u0DD4\u0DAB\u0DCF! \u0DAF\u0DD0\u0DB1\u0DCA \u0DB8\u0DDA \u0DB4\u0DD2\u0DBA\u0DC0\u0DBB \u0D85\u0DB1\u0DD4\u0D9C\u0DB8\u0DB1\u0DBA \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1:</p>' +
         '<ol style="margin-top:8px;">' +
-        '<li>Gemini chat box එකේ <b>"+"</b> බොත්තම ඔබන්න.</li>' +
-        '<li><b>"Upload files"</b> ඔබන්න.</li>' +
-        '<li>Desktop එකේ තියෙන <b>' + fileInfo + '</b> තෝරලා Open ඔබන්න.</li>' +
-        '<li>Prompt එක ඉබේම type වෙලා තියෙනවා - දැන් <b>Send</b> ඔබන්න!</li>' +
+        '<li>Gemini chat box \u0D91\u0D9A\u0DDA <b>"+"</b> \u0DB6\u0DDD\u0DAD\u0DCA\u0DAD\u0DB8 \u0D94\u0DB6\u0DB1\u0DCA\u0DB1.</li>' +
+        '<li><b>"Upload files"</b> \u0D94\u0DB6\u0DB1\u0DCA\u0DB1.</li>' +
+        '<li>Desktop \u0D91\u0D9A\u0DDA \u0DAD\u0DD2\u0DBA\u0DD9\u0DB1 <b>' + fileInfo + '</b> \u0DAD\u0DDD\u0DBB\u0DBD\u0DCF Open \u0D94\u0DB6\u0DB1\u0DCA\u0DB1.</li>' +
+        '<li>Prompt \u0D91\u0D9A \u0D89\u0DB6\u0DDA\u0DB8 type \u0DC0\u0DD9\u0DBD\u0DCF \u0DAD\u0DD2\u0DBA\u0DD9\u0DB1\u0DC0\u0DCF - \u0DAF\u0DD0\u0DB1\u0DCA <b>Send</b> \u0D94\u0DB6\u0DB1\u0DCA\u0DB1!</li>' +
         '</ol>' +
         '<p style="margin-top:12px; font-size:11px; color:#aaa;">' +
-        '📁 Text File: <code style="font-size:10px;">' + data.textPath + '</code>' +
+        '\uD83D\uDCC1 Text File: <code style="font-size:10px;">' + data.textPath + '</code>' +
         pdfLine +
         '</p>' +
         '</div>';
 
-    // Hide BrowserView so popup is visible
-    ipcRenderer.send('hide-active-view');
+    window.electronAPI.hideActiveView();
     
     Swal.fire({
-        title: data.pdfPath ? '📄 Context & Images Ready!' : '📄 Context Ready!',
+        title: data.pdfPath ? '\uD83D\uDCC4 Context & Images Ready!' : '\uD83D\uDCC4 Context Ready!',
         html: htmlContent,
         icon: 'success',
-        confirmButtonText: 'OK, මම Upload කරන්නම් ✅',
+        confirmButtonText: 'OK, \u0DB8\u0DB8 Upload \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1\u0DB8\u0DCA \u2705',
         confirmButtonColor: '#10a37f',
-    }).then(() => {
-        ipcRenderer.send('show-active-view');
+    }).then(function() {
+        window.electronAPI.showActiveView();
     });
 });
-

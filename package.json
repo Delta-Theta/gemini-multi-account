@@ -14,7 +14,14 @@
       "output": "dist"
     },
     "files": [
-      "**/*"
+      "main.js",
+      "renderer.js",
+      "preload.js",
+      "preload-main.js",
+      "index.html",
+      "style.css",
+      "default-selectors.json",
+      "node_modules/sweetalert2/**/*"
     ],
     "win": {
       "target": "nsis"
