@@ -24,7 +24,8 @@
       "node_modules/sweetalert2/**/*"
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": false,

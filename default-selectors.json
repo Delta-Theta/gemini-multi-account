@@ -1,18 +1,26 @@
 {
-  "version": 1,
+  "version": 3,
+  "hideNativeSidebar": false,
   "selectors": {
-    "editor": "rich-textarea, .ql-editor, [contenteditable=\"true\"], [role=\"textbox\"]",
-    "sendButton": "button[aria-label*=\"Send\"], button[aria-label*=\"send\"], .send-button",
-    "chatContainer": "chat-app",
+    "editor": "rich-textarea .ql-editor, rich-textarea [contenteditable=\"true\"], .ql-editor, [contenteditable=\"true\"], [role=\"textbox\"]",
+    "sendButton": "button[aria-label*=\"Send\" i], .send-button",
+    "chatContainer": "chat-app, main",
     "chatNodes": "user-query, model-response, [data-message-author], message-content",
     "avatarClass": "avatar",
-    "sidebarElements": "navigation-drawer, side-navigation-drawer, [data-test-id=\"conversation-list\"], .mat-drawer, nav",
-    "hamburgerMenu": "[aria-label=\"Main menu\"], .hamburger-menu",
-    "mainContent": "main, .page-content, .main-content",
-    "chatListLinks": "a[href*=\"/app/\"]"
+    "chatListLinks": "a[href*=\"/app/\"]",
+    "limitContainers": "[role=\"alert\"], [aria-live], snack-bar-container, mat-snack-bar-container, .mat-mdc-snack-bar-container, input-container, .input-area-container, bottom-container",
+    "sidebarElements": "mat-sidenav:not(mat-sidenav-content), side-navigation-drawer, navigation-drawer",
+    "sidebarContent": "mat-sidenav-content, .mat-drawer-content",
+    "hamburgerMenu": "button[aria-label=\"Main menu\" i], .hamburger-menu",
+    "mainContent": "main, .mat-sidenav-content"
   },
   "regex": {
-    "limitMessages": ["You've reached your limit", "limit reached"],
-    "limitReset": "try again at ([\\d:]+\\s[AP]M)"
+    "limitMessages": [
+      "You've reached your limit",
+      "You’ve reached your limit",
+      "reached your Gemini",
+      "reached your usage limit"
+    ],
+    "limitReset": "try again (?:at|after)\\s+([\\d:]+\\s*[AP]M|[A-Za-z]+\\s+\\d+(?:,\\s*[\\d:]+\\s*[AP]M)?)"
   }
 }
